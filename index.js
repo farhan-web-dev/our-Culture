@@ -86,7 +86,7 @@ server.use(
 server.use(passport.authenticate("session"));
 server.use(
   cors({
-    origin: "https://our-culture-frontend-new.vercel.app/", // ✅ no slash at end
+    origin: "https://our-culture-frontend-new.vercel.app", // ✅ no slash at end
     credentials: true, // ✅ allow cookies or auth headers
     exposedHeaders: ["X-Total-Count"], // ✅ if you need custom headers
   })
