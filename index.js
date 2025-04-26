@@ -86,10 +86,12 @@ server.use(
 server.use(passport.authenticate("session"));
 server.use(
   cors({
-    exposedHeaders: ["X-Total-Count"],
+    origin: "https://our-culture-frontend-2rt5jjncc-farhan1.vercel.app", // ✅ no slash at end
+    credentials: true, // ✅ allow cookies or auth headers
+    exposedHeaders: ["X-Total-Count"], // ✅ if you need custom headers
   })
 );
-server.use(cors({ origin: "http://localhost:3000" }));
+
 server.use(express.json()); // to parse req.body
 
 server.use("/products", isAuth(), productsRouter.router);
