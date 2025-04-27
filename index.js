@@ -31,41 +31,41 @@ const server = express();
 // --- Stripe Webhook (MUST come before express.json) ---
 const endpointSecret = process.env.ENDPOINT_SECRET;
 
-server.post(
-  "/webhook",
-  express.raw({ type: "application/json" }),
-  async (request, response) => {
-    const sig = request.headers["stripe-signature"];
-    let event;
+// server.post(
+//   "/webhook",
+//   express.raw({ type: "application/json" }),
+//   async (request, response) => {
+//     const sig = request.headers["stripe-signature"];
+//     let event;
 
-    try {
-      event = stripe.webhooks.constructEvent(request.body, sig, endpointSecret);
-    } catch (err) {
-      console.error(`Webhook Error: ${err.message}`);
-      return response.status(400).send(`Webhook Error: ${err.message}`);
-    }
+//     try {
+//       event = stripe.webhooks.constructEvent(request.body, sig, endpointSecret);
+//     } catch (err) {
+//       console.error(`Webhook Error: ${err.message}`);
+//       return response.status(400).send(`Webhook Error: ${err.message}`);
+//     }
 
-    // Handle payment intent success
-    if (event.type === "payment_intent.succeeded") {
-      const paymentIntentSucceeded = event.data.object;
-      try {
-        const order = await Order.findById(
-          paymentIntentSucceeded.metadata.orderId
-        );
-        if (order) {
-          order.paymentStatus = "received";
-          await order.save();
-        }
-      } catch (err) {
-        console.error("Error updating order payment status", err);
-      }
-    } else {
-      console.log(`Unhandled event type ${event.type}`);
-    }
+//     // Handle payment intent success
+//     if (event.type === "payment_intent.succeeded") {
+//       const paymentIntentSucceeded = event.data.object;
+//       try {
+//         const order = await Order.findById(
+//           paymentIntentSucceeded.metadata.orderId
+//         );
+//         if (order) {
+//           order.paymentStatus = "received";
+//           await order.save();
+//         }
+//       } catch (err) {
+//         console.error("Error updating order payment status", err);
+//       }
+//     } else {
+//       console.log(`Unhandled event type ${event.type}`);
+//     }
 
-    response.status(200).send();
-  }
-);
+//     response.status(200).send();
+//   }
+// );
 
 // --- Middlewares (CORS, Cookie, Body Parsing) ---
 server.use(
@@ -99,6 +99,11 @@ server.use(express.json());
 // Serve static files
 server.use(express.static(path.resolve(__dirname, "build")));
 
+// Serve React App (For any other route)
+server.get("*", (req, res) => {
+  res.sendFile(path.resolve(__dirname, "build", "index.html"));
+});
+
 // --- Routers ---
 server.use("/auth", authRouter.router);
 server.use("/products", isAuth(), productsRouter.router);
@@ -125,11 +130,6 @@ server.post("/create-payment-intent", async (req, res) => {
     console.error("Payment intent creation failed", err);
     res.status(500).send({ error: "Payment intent creation failed" });
   }
-});
-
-// Serve React App (For any other route)
-server.get("*", (req, res) => {
-  res.sendFile(path.resolve(__dirname, "build", "index.html"));
 });
 
 // --- Passport Strategies ---
