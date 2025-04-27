@@ -1,16 +1,15 @@
 require("dotenv").config({ path: "./config.env" });
 
 const express = require("express");
-const server = express();
 const mongoose = require("mongoose");
 const cors = require("cors");
 const session = require("express-session");
 const passport = require("passport");
 const LocalStrategy = require("passport-local").Strategy;
-const crypto = require("crypto");
-const jwt = require("jsonwebtoken");
 const JwtStrategy = require("passport-jwt").Strategy;
 const ExtractJwt = require("passport-jwt").ExtractJwt;
+const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 const stripe = require("stripe")(process.env.STRIPE_SERVER_KEY);
@@ -27,7 +26,9 @@ const { User } = require("./model/User");
 const { Order } = require("./model/Order");
 const { isAuth, sanitizeUser, cookieExtractor } = require("./services/common");
 
-// Stripe Webhook (handle it early because it needs raw body)
+const server = express();
+
+// --- Stripe Webhook (MUST come before express.json) ---
 const endpointSecret = process.env.ENDPOINT_SECRET;
 
 server.post(
@@ -44,7 +45,7 @@ server.post(
       return response.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Handle the event
+    // Handle payment intent success
     if (event.type === "payment_intent.succeeded") {
       const paymentIntentSucceeded = event.data.object;
       try {
@@ -66,24 +67,7 @@ server.post(
   }
 );
 
-// Middlewares
-server.use(express.static(path.resolve(__dirname, "build")));
-server.use(cookieParser());
-
-// Session middleware (before passport.session)
-server.use(
-  session({
-    secret: process.env.SESSION_KEY,
-    resave: false,
-    saveUninitialized: false,
-  })
-);
-
-// Passport middleware
-server.use(passport.initialize());
-server.use(passport.session());
-
-// CORS middleware
+// --- Middlewares (CORS, Cookie, Body Parsing) ---
 server.use(
   cors({
     origin: [
@@ -95,36 +79,68 @@ server.use(
   })
 );
 
-// Body parser (after raw body handling webhook)
+server.use(cookieParser());
+
+// Session must come before passport
+server.use(
+  session({
+    secret: process.env.SESSION_KEY,
+    resave: false,
+    saveUninitialized: false,
+  })
+);
+
+server.use(passport.initialize());
+server.use(passport.session());
+
+// Body Parser (AFTER webhook raw body)
 server.use(express.json());
 
-// Routers
+// Serve static files
+server.use(express.static(path.resolve(__dirname, "build")));
+
+// --- Routers ---
+server.use("/auth", authRouter.router);
 server.use("/products", isAuth(), productsRouter.router);
 server.use("/categories", isAuth(), categoriesRouter.router);
 server.use("/brands", isAuth(), brandsRouter.router);
 server.use("/users", isAuth(), usersRouter.router);
-server.use("/auth", authRouter.router);
 server.use("/cart", isAuth(), cartRouter.router);
 server.use("/orders", isAuth(), ordersRouter.router);
 
-// Serve React app for any other route
+// Create Payment Intent (Stripe)
+server.post("/create-payment-intent", async (req, res) => {
+  const { totalAmount, orderId } = req.body;
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: totalAmount * 100, // converting rupees to paise
+      currency: "inr",
+      automatic_payment_methods: { enabled: true },
+      metadata: { orderId },
+    });
+
+    res.send({ clientSecret: paymentIntent.client_secret });
+  } catch (err) {
+    console.error("Payment intent creation failed", err);
+    res.status(500).send({ error: "Payment intent creation failed" });
+  }
+});
+
+// Serve React App (For any other route)
 server.get("*", (req, res) => {
   res.sendFile(path.resolve(__dirname, "build", "index.html"));
 });
 
-// Passport Strategies
-const opts = {
-  jwtFromRequest: cookieExtractor,
-  secretOrKey: process.env.JWT_SECRET_KEY,
-};
-
+// --- Passport Strategies ---
+// Local Strategy
 passport.use(
   "local",
   new LocalStrategy(
     { usernameField: "email" },
     async (email, password, done) => {
       try {
-        const user = await User.findOne({ email: email });
+        const user = await User.findOne({ email });
         if (!user) {
           return done(null, false, { message: "Invalid credentials" });
         }
@@ -156,6 +172,12 @@ passport.use(
   )
 );
 
+// JWT Strategy
+const opts = {
+  jwtFromRequest: cookieExtractor,
+  secretOrKey: process.env.JWT_SECRET_KEY,
+};
+
 passport.use(
   "jwt",
   new JwtStrategy(opts, async (jwt_payload, done) => {
@@ -172,7 +194,7 @@ passport.use(
   })
 );
 
-// Passport serialize/deserialize
+// Serialize and Deserialize
 passport.serializeUser((user, done) => {
   process.nextTick(() => {
     done(null, { id: user.id, role: user.role });
@@ -185,28 +207,7 @@ passport.deserializeUser((user, done) => {
   });
 });
 
-// Stripe Payment Intent
-server.post("/create-payment-intent", async (req, res) => {
-  const { totalAmount, orderId } = req.body;
-
-  try {
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: totalAmount * 100, // in paise
-      currency: "inr",
-      automatic_payment_methods: {
-        enabled: true,
-      },
-      metadata: { orderId },
-    });
-
-    res.send({ clientSecret: paymentIntent.client_secret });
-  } catch (err) {
-    console.error("Payment intent creation failed", err);
-    res.status(500).send({ error: "Payment intent creation failed" });
-  }
-});
-
-// MongoDB Connection
+// --- Database Connection ---
 async function main() {
   try {
     await mongoose.connect(process.env.MONGODB_URL);
@@ -218,7 +219,7 @@ async function main() {
 
 main();
 
-// Start server
+// --- Start Server ---
 const PORT = process.env.PORT || 8000;
 server.listen(PORT, () => {
   console.log(`Server started on port ${PORT}`);
