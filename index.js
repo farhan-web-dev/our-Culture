@@ -89,6 +89,7 @@ server.use(
     origin: [
       "https://our-culture-frontend-new.vercel.app",
       "http://localhost:3000",
+      "https://our-culture.vercel.app",
     ],
     credentials: true,
     exposedHeaders: ["X-Total-Count"],
@@ -108,7 +109,7 @@ server.use("/orders", isAuth(), ordersRouter.router);
 
 // this line we add to make react router work in case of other routes doesnt match
 server.get("*", (req, res) =>
-  res.sendFile(path.resolve("build", "index.html"))
+  res.sendFile(path.join(__dirname, "build", "index.html"))
 );
 
 // Passport Strategies
