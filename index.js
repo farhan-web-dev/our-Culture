@@ -1,6 +1,6 @@
 require("dotenv").config({ path: "./config.env" });
 const express = require("express");
-// const server = express();
+const server = express();
 const mongoose = require("mongoose");
 const cors = require("cors");
 const session = require("express-session");
@@ -25,76 +25,81 @@ const path = require("path");
 const { Order } = require("./model/Order");
 const { env } = require("process");
 
-const server = express();
-const cookieExtractor = (req) => {
-  let token = null;
-  if (req && req.cookies) {
-    token = req.cookies["jwt"];
-  }
-  return token;
-};
+// Webhook
 
-const opts = {
-  jwtFromRequest: cookieExtractor,
-  secretOrKey: process.env.JWT_SECRET_KEY,
-};
+// const endpointSecret = process.env.ENDPOINT_SECRET;
 
-// Environment checks
-if (process.env.NODE_ENV === "production") {
-  if (!process.env.SESSION_KEY || !process.env.JWT_SECRET_KEY) {
-    throw new Error("Missing required environment variables for production");
-  }
-}
+// server.post(
+//   "/webhook",
+//   express.raw({ type: "application/json" }),
+//   async (request, response) => {
+//     const sig = request.headers["stripe-signature"];
 
-// Middlewares
+//     let event;
+
+//     try {
+//       event = stripe.webhooks.constructEvent(request.body, sig, endpointSecret);
+//     } catch (err) {
+//       response.status(400).send(Webhook Error: ${err.message});
+//       return;
+//     }
+
+//     // Handle the event
+//     switch (event.type) {
+//       case "payment_intent.succeeded":
+//         const paymentIntentSucceeded = event.data.object;
+
+//         const order = await Order.findById(
+//           paymentIntentSucceeded.metadata.orderId
+//         );
+//         order.paymentStatus = "received";
+//         await order.save();
+
+//         break;
+//       // ... handle other event types
+//       default:
+//         console.log(Unhandled event type ${event.type});
+//     }
+
+//     // Return a 200 response to acknowledge receipt of the event
+//     response.send();
+//   }
+// );
+
+// JWT options
+
+const opts = {};
+opts.jwtFromRequest = cookieExtractor;
+opts.secretOrKey = process.env.JWT_SECRET_KEY;
+
+//middlewares
+
 server.use(express.static(path.resolve(__dirname, "build")));
 server.use(cookieParser());
-
-// Session configuration
 server.use(
   session({
     secret: process.env.SESSION_KEY,
     resave: false,
     saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      domain:
-        process.env.NODE_ENV === "production"
-          ? ".our-culture.vercel.app"
-          : "localhost",
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    },
   })
 );
-
-// CORS configuration
-const allowedOrigins = [
-  "https://our-culture-frontend-new.vercel.app",
-  "http://localhost:3000",
-];
-
+server.use(passport.authenticate("session"));
 server.use(
   cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
+    origin: [
+      "https://our-culture-frontend-new.vercel.app",
+      "http://localhost:3000",
+      "https://our-culture.vercel.app",
+    ],
     credentials: true,
-    exposedHeaders: ["X-Total-Count", "set-cookie"],
+    exposedHeaders: ["X-Total-Count"],
   })
 );
 
-server.use(express.json());
-server.use(passport.initialize());
-server.use(passport.session());
+server.use(express.json()); // to parse req.body
 
-// Routes
 server.use("/products", isAuth(), productsRouter.router);
+// we can also use JWT token for client-only auth
 server.use("/categories", isAuth(), categoriesRouter.router);
 server.use("/brands", isAuth(), brandsRouter.router);
 server.use("/users", isAuth(), usersRouter.router);
@@ -102,7 +107,7 @@ server.use("/auth", authRouter.router);
 server.use("/cart", isAuth(), cartRouter.router);
 server.use("/orders", isAuth(), ordersRouter.router);
 
-// Catch-all route for React
+// this line we add to make react router work in case of other routes doesnt match
 server.get("*", (req, res) =>
   res.sendFile(path.join(__dirname, "build", "index.html"))
 );
@@ -110,47 +115,49 @@ server.get("*", (req, res) =>
 // Passport Strategies
 passport.use(
   "local",
-  new LocalStrategy(
-    { usernameField: "email" },
-    async (email, password, done) => {
-      try {
-        const user = await User.findOne({ email });
-        if (!user) {
-          return done(null, false, { message: "Invalid credentials" });
-        }
-
-        crypto.pbkdf2(
-          password,
-          user.salt,
-          310000,
-          32,
-          "sha256",
-          async (err, hashedPassword) => {
-            if (err) return done(err);
-            if (!crypto.timingSafeEqual(user.password, hashedPassword)) {
-              return done(null, false, { message: "Invalid credentials" });
-            }
-            const token = jwt.sign(
-              sanitizeUser(user),
-              process.env.JWT_SECRET_KEY
-            );
-            done(null, { id: user.id, role: user.role, token });
-          }
-        );
-      } catch (err) {
-        done(err);
+  new LocalStrategy({ usernameField: "email" }, async function (
+    email,
+    password,
+    done
+  ) {
+    // by default passport uses username
+    console.log({ email, password });
+    try {
+      const user = await User.findOne({ email: email });
+      console.log(email, password, user);
+      if (!user) {
+        return done(null, false, { message: "invalid credentials" }); // for safety
       }
+      crypto.pbkdf2(
+        password,
+        user.salt,
+        310000,
+        32,
+        "sha256",
+        async function (err, hashedPassword) {
+          if (!crypto.timingSafeEqual(user.password, hashedPassword)) {
+            return done(null, false, { message: "invalid credentials" });
+          }
+          const token = jwt.sign(
+            sanitizeUser(user),
+            process.env.JWT_SECRET_KEY
+          );
+          done(null, { id: user.id, role: user.role, token }); // this lines sends to serializer
+        }
+      );
+    } catch (err) {
+      done(err);
     }
-  )
+  })
 );
 
 passport.use(
   "jwt",
-  new JwtStrategy(opts, async (jwt_payload, done) => {
+  new JwtStrategy(opts, async function (jwt_payload, done) {
     try {
       const user = await User.findById(jwt_payload.id);
       if (user) {
-        return done(null, sanitizeUser(user));
+        return done(null, sanitizeUser(user)); // this calls serializer
       } else {
         return done(null, false);
       }
@@ -160,73 +167,53 @@ passport.use(
   })
 );
 
-// Passport serialization
-passport.serializeUser((user, cb) => {
-  process.nextTick(() => {
-    cb(null, { id: user.id, role: user.role });
+// this creates session variable req.user on being called from callbacks
+passport.serializeUser(function (user, cb) {
+  process.nextTick(function () {
+    return cb(null, { id: user.id, role: user.role });
   });
 });
 
-passport.deserializeUser((user, cb) => {
-  process.nextTick(() => {
-    cb(null, user);
+// this changes session variable req.user when called from authorized request
+
+passport.deserializeUser(function (user, cb) {
+  process.nextTick(function () {
+    return cb(null, user);
   });
 });
 
-// Stripe Payment
+// Payments
+
+// This is your test secret API key.
+const stripe = require("stripe")(process.env.STRIPE_SERVER_KEY);
+
 server.post("/create-payment-intent", async (req, res) => {
   const { totalAmount, orderId } = req.body;
 
-  try {
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: totalAmount * 100,
-      currency: "inr",
-      automatic_payment_methods: {
-        enabled: true,
-      },
-      metadata: {
-        orderId,
-      },
-    });
+  // Create a PaymentIntent with the order amount and currency
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: totalAmount * 100, // for decimal compensation
+    currency: "inr",
+    automatic_payment_methods: {
+      enabled: true,
+    },
+    metadata: {
+      orderId,
+    },
+  });
 
-    res.send({
-      clientSecret: paymentIntent.client_secret,
-    });
-  } catch (err) {
-    res.status(500).send({ error: err.message });
-  }
+  res.send({
+    clientSecret: paymentIntent.client_secret,
+  });
 });
 
-// Error handling middleware
-server.use((err, req, res, next) => {
-  if (err.message === "Not allowed by CORS") {
-    return res.status(403).json({ error: "CORS policy violation" });
-  }
-  console.error(err.stack);
-  res.status(500).send("Something broke!");
-});
+main().catch((err) => console.log(err));
 
-// Database connection and server start
 async function main() {
-  try {
-    await mongoose.connect(process.env.MONGODB_URL);
-    console.log("Database connected");
-
-    server.listen(process.env.PORT, () => {
-      console.log(`Server started on port ${process.env.PORT}`);
-    });
-  } catch (err) {
-    console.error("Failed to start server:", err);
-    process.exit(1);
-  }
+  await mongoose.connect(process.env.MONGODB_URL);
+  console.log("database connected");
 }
 
-main();
-
-// Auth middleware
-function isAuth(req, res, next) {
-  if (req.isAuthenticated()) {
-    return next();
-  }
-  res.status(401).json({ message: "Unauthorized" });
-}
+server.listen(process.env.PORT, () => {
+  console.log("server started on port", process.env.PORT);
+});
