@@ -75,6 +75,7 @@ opts.secretOrKey = process.env.JWT_SECRET_KEY;
 //middlewares
 
 server.use(express.static(path.resolve(__dirname, "build")));
+server.use("/uploads", express.static(path.join(__dirname, "public/uploads")));
 server.use(cookieParser());
 server.use(
   session({
